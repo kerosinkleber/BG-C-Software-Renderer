@@ -16,7 +16,7 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
       font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-    #view { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated;
+    #view, #viewGpu { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated;
       cursor: crosshair; touch-action: none; }
     .panel { position: fixed; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
       padding: 10px 12px; backdrop-filter: blur(6px); }
@@ -26,6 +26,7 @@
     #controls label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
     #controls select, #controls input[type=range] { width: 120px; }
     #controls input[type=checkbox] { margin: 0; }
+    #controls .disabled { opacity: 0.45; pointer-events: none; }
     #controls details summary { cursor: pointer; color: var(--muted); }
     #controls .help { color: var(--muted); margin-top: 8px; font-size: 12px; }
     #stats { top: 12px; right: 12px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -40,12 +41,19 @@
 </head>
 <body>
   <canvas id="view"></canvas>
+  <canvas id="viewGpu" hidden></canvas>
 
   <div id="controls" class="panel">
     <h1>BG Software Renderer</h1>
-    <div class="sub">C++ CPU rasterizer, WebAssembly build</div>
+    <div class="sub">C++ CPU rasterizer (WebAssembly) and its WebGPU version</div>
     <details open>
       <summary>Settings</summary>
+      <label>Renderer
+        <select id="renderer">
+          <option value="cpu" selected>CPU (WebAssembly)</option>
+          <option value="gpu">GPU (WebGPU)</option>
+        </select>
+      </label>
       <label>Resolution
         <select id="resolution">
           <option value="0.25">25%</option>
@@ -55,7 +63,7 @@
           <option value="1">100%</option>
         </select>
       </label>
-      <label>Threads <span><input id="threads" type="range" min="1" max="1" value="1"> <span id="threadsOut">1</span></span></label>
+      <label class="cpu-only">Threads <span><input id="threads" type="range" min="1" max="1" value="1"> <span id="threadsOut">1</span></span></label>
       <label>Lighting
         <select id="lighting">
           <option value="deferred" selected>Per pixel (deferred)</option>
@@ -64,7 +72,7 @@
         </select>
       </label>
       <label>Crowd size <span><input id="crowd" type="range" min="0" max="3000" step="50" value="600"> <span id="crowdOut">600</span></span></label>
-      <label>SIMD <input id="simd" type="checkbox" checked></label>
+      <label class="cpu-only">SIMD <input id="simd" type="checkbox" checked></label>
       <label>Point lights <input id="pointLights" type="checkbox" checked></label>
       <label>Debug triangles <input id="debugTris" type="checkbox"></label>
       <label>Animate <input id="animate" type="checkbox" checked></label>

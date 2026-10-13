@@ -1,11 +1,15 @@
-// Demo scene for the WebAssembly build of the BG software renderer.
+// Demo scene for the BG software renderer: the CPU engine (WebAssembly) or its WebGPU version.
 import { BgEngine } from './bg-engine.js';
+import { GpuRenderer } from './gpu-renderer.js';
 import { plane, box, sphere, torus, cylinder, merge, textures } from './scene.js';
 
 const $ = (id) => document.getElementById(id);
-const canvas = $('view');
-const ctx = canvas.getContext('2d', { alpha: false });
+// A canvas can only ever have one kind of context, so each renderer gets its own canvas.
+const cpuCanvas = $('view');
+const gpuCanvas = $('viewGpu');
+const ctx = cpuCanvas.getContext('2d', { alpha: false });
 const ui = {
+  renderer: $('renderer'), cpuOnly: document.querySelectorAll('.cpu-only'),
   resolution: $('resolution'), threads: $('threads'), threadsOut: $('threadsOut'), lighting: $('lighting'),
   crowd: $('crowd'), crowdOut: $('crowdOut'), simd: $('simd'), pointLights: $('pointLights'),
   debugTris: $('debugTris'), animate: $('animate'), autoCam: $('autoCam'), stats: $('stats'),
@@ -36,33 +40,44 @@ function rng(seed) {
 
 // ------------------------------------------------------------------ scene setup
 
-function buildScene(engine) {
-  const tex = {};
-  for (const [name, make] of Object.entries(textures)) {
-    const t = make();
-    tex[name] = engine.addTexture(t.rgba, t.width, t.height);
-  }
-
+// Geometry and textures are generated once and then handed to whichever renderer
+// (CPU or GPU) is active, so both draw exactly the same scene.
+function sceneAssets() {
+  const tex = Object.fromEntries(Object.entries(textures).map(([name, make]) => [name, make()]));
   const meshes = {
-    ground: engine.addMesh(plane(240, 240, 48, 48, 60), { texture: tex.grass, isStatic: true }),
-    plaza: engine.addMesh(plane(30, 30, 12, 12, 4), { texture: tex.checker, spec: 0.55, isStatic: true }),
-    pillar: engine.addMesh(box(1.6, 7, 1.6), { texture: tex.bricks }),
-    chrome: engine.addMesh(sphere(1, 32, 20), { spec: 0.92, met: 1 }),
-    glossy: engine.addMesh(sphere(1, 24, 16), { spec: 0.75 }),
-    ring: engine.addMesh(torus(1.6, 0.4, 36, 14), { texture: tex.wood, spec: 0.6, met: 0.5 }),
-    crate: engine.addMesh(box(1, 1, 1), { texture: tex.wood }),
-    tree: engine.addMesh(merge(
+    ground: [plane(240, 240, 48, 48, 60), { texture: 'grass', isStatic: true }],
+    plaza: [plane(30, 30, 12, 12, 4), { texture: 'checker', spec: 0.55, isStatic: true }],
+    pillar: [box(1.6, 7, 1.6), { texture: 'bricks' }],
+    chrome: [sphere(1, 32, 20), { spec: 0.92, met: 1 }],
+    glossy: [sphere(1, 24, 16), { spec: 0.75 }],
+    ring: [torus(1.6, 0.4, 36, 14), { texture: 'wood', spec: 0.6, met: 0.5 }],
+    crate: [box(1, 1, 1), { texture: 'wood' }],
+    tree: [merge(
       { mesh: cylinder(0.25, 0.2, 1.5, 8) },
       { mesh: cylinder(1.4, 0, 3, 10), offset: [0, 1.2, 0] },
       { mesh: cylinder(1.0, 0, 2.2, 10), offset: [0, 2.6, 0] },
-    ), { texture: tex.leaves }),
-    soldier: engine.addMesh(merge(
+    ), { texture: 'leaves' }],
+    soldier: [merge(
       { mesh: box(0.6, 0.8, 0.35), offset: [0, 0.9, 0] },
       { mesh: box(0.22, 0.5, 0.22), offset: [-0.15, 0.25, 0] },
       { mesh: box(0.22, 0.5, 0.22), offset: [0.15, 0.25, 0] },
       { mesh: sphere(0.2, 8, 6), offset: [0, 1.5, 0] },
-    ), { spec: 0.3 }),
+    ), { spec: 0.3 }],
   };
+  // Same random debug-triangle colors for both renderers.
+  for (const [mesh, opts] of Object.values(meshes)) {
+    opts.faceColors = new Uint8Array(mesh.tris.length / 3 * 4).map((_, i) => (i % 4 === 3 ? 255 : Math.random() * 256));
+  }
+  return { tex, meshes };
+}
+
+function buildScene(engine, assets) {
+  const tex = {};
+  for (const [name, t] of Object.entries(assets.tex)) tex[name] = engine.addTexture(t.rgba, t.width, t.height);
+  const meshes = {};
+  for (const [name, [mesh, opts]] of Object.entries(assets.meshes)) {
+    meshes[name] = engine.addMesh(mesh, { ...opts, texture: opts.texture ? tex[opts.texture] : 0 });
+  }
 
   const random = rng(7);
   const trees = [];
@@ -159,25 +174,27 @@ const keys = new Set();
 
 function stopAutoCam() { ui.autoCam.checked = false; }
 
-canvas.addEventListener('click', () => {
-  if (matchMedia('(pointer: fine)').matches) canvas.requestPointerLock?.();
-});
+let drag = null;
+for (const canvas of [cpuCanvas, gpuCanvas]) {
+  canvas.addEventListener('click', () => {
+    if (matchMedia('(pointer: fine)').matches) canvas.requestPointerLock?.();
+  });
+  canvas.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') drag = { x: e.clientX, y: e.clientY }; });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    stopAutoCam();
+    camera.yaw += (e.clientX - drag.x) * 0.005;
+    camera.pitch = Math.max(-1.55, Math.min(1.55, camera.pitch + (e.clientY - drag.y) * 0.005));
+    drag = { x: e.clientX, y: e.clientY };
+  });
+  canvas.addEventListener('pointerup', () => { drag = null; });
+}
 document.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement !== canvas) return;
+  if (document.pointerLockElement !== cpuCanvas && document.pointerLockElement !== gpuCanvas) return;
   stopAutoCam();
   camera.yaw += e.movementX * 0.0025;
   camera.pitch = Math.max(-1.55, Math.min(1.55, camera.pitch + e.movementY * 0.0025));
 });
-let drag = null;
-canvas.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') drag = { x: e.clientX, y: e.clientY }; });
-canvas.addEventListener('pointermove', (e) => {
-  if (!drag) return;
-  stopAutoCam();
-  camera.yaw += (e.clientX - drag.x) * 0.005;
-  camera.pitch = Math.max(-1.55, Math.min(1.55, camera.pitch + (e.clientY - drag.y) * 0.005));
-  drag = { x: e.clientX, y: e.clientY };
-});
-canvas.addEventListener('pointerup', () => { drag = null; });
 addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   keys.add(e.code);
@@ -208,88 +225,176 @@ function updateCamera(dt, time) {
   for (let i = 0; i < 3; i++) camera.position[i] += move[i] * speed;
 }
 
-// ------------------------------------------------------------------ main loop
+// ------------------------------------------------------------------ renderers
 
-function resize(engine) {
+const params = new URLSearchParams(location.search);
+const assets = sceneAssets();
+// name -> { engine, scene, canvas } once loaded (or a promise while loading).
+const backends = {};
+let active = null;
+
+function showError(message) {
+  const box = $('error');
+  box.style.display = message ? 'block' : 'none';
+  box.textContent = message || '';
+}
+
+function resizeActive() {
+  if (!active) return;
   const scale = parseFloat(ui.resolution.value);
   const w = Math.max(64, Math.floor(innerWidth * scale));
   const h = Math.max(36, Math.floor(innerHeight * scale));
-  if (w === canvas.width && h === canvas.height && engine.width === w) return;
-  canvas.width = w;
-  canvas.height = h;
-  engine.resize(w, h);
+  if (active.engine.width === w && active.engine.height === h) return;
+  active.canvas.width = w;
+  active.canvas.height = h;
+  active.engine.resize(w, h);
 }
 
-async function main() {
-  let engine;
+async function loadBackend(name) {
+  if (name === 'cpu') {
+    const engine = await BgEngine.load({ forceSingleThread: params.has('st') });
+    return { name, engine, canvas: cpuCanvas, scene: buildScene(engine, assets) };
+  }
+  const engine = await GpuRenderer.load(gpuCanvas);
+  if (!engine) throw new Error('WebGPU is not available in this browser');
+  engine.device.lost.then((info) => { if (active?.engine === engine) showError(`WebGPU device lost: ${info.message}`); });
+  return { name, engine, canvas: gpuCanvas, scene: buildScene(engine, assets) };
+}
+
+async function switchRenderer(name) {
   try {
-    engine = await BgEngine.load({ forceSingleThread: new URLSearchParams(location.search).has('st') });
+    backends[name] ??= loadBackend(name);
+    const backend = await backends[name];
+    if (ui.renderer.value !== name) return; // the user switched again while loading
+    active = backend;
+    showError('');
   } catch (err) {
-    const box = $('error');
-    box.style.display = 'block';
-    box.textContent = `Could not load the WebAssembly engine: ${err}. Serve this folder over HTTP (see README), `
-      + 'and use a browser with WebAssembly SIMD support.';
-    ui.stats.textContent = '';
-    throw err;
+    delete backends[name];
+    const hint = name === 'cpu'
+      ? 'Serve this folder over HTTP (see README) and use a browser with WebAssembly SIMD support.'
+      : 'Use a browser with WebGPU (recent Chrome, Edge or Safari; Firefox on some platforms).';
+    const message = `Could not start the ${name === 'cpu' ? 'CPU (WebAssembly)' : 'GPU (WebGPU)'} renderer: ${err.message || err}. ${hint}`;
+    showError(message);
+    console.error(err);
+    if (name === 'gpu') {
+      const option = ui.renderer.querySelector('option[value=gpu]');
+      option.disabled = true;
+      option.textContent = 'GPU (WebGPU, not available)';
+      // Nothing is running yet (e.g. opened with ?renderer=gpu): fall back to the CPU renderer.
+      if (!active) {
+        ui.renderer.value = 'cpu';
+        await switchRenderer('cpu');
+        showError(`${message} Using the CPU renderer instead.`);
+        setTimeout(() => { if (active?.name === 'cpu') showError(''); }, 8000);
+        return;
+      }
+    }
+    if (active) ui.renderer.value = active.name;
+    return;
   }
+  cpuCanvas.hidden = name !== 'cpu';
+  gpuCanvas.hidden = name !== 'gpu';
+  ui.cpuOnly.forEach((el) => { el.classList.toggle('disabled', name !== 'cpu'); });
+  if (name === 'cpu') {
+    const { engine } = active;
+    ui.threads.max = engine.maxThreads;
+    if (+ui.threads.value > engine.maxThreads || !ui.threads.dataset.touched) ui.threads.value = engine.maxThreads;
+    ui.threadsOut.textContent = ui.threads.value;
+  }
+  avg = null;
+  resizeActive();
+  if (params.get('renderer') !== name) {
+    params.set('renderer', name);
+    history.replaceState(null, '', `?${params}`);
+  }
+}
 
-  ui.threads.max = engine.maxThreads;
-  ui.threads.value = engine.maxThreads;
-  ui.threadsOut.textContent = engine.maxThreads;
-  ui.threads.addEventListener('input', () => { ui.threadsOut.textContent = ui.threads.value; });
+// ------------------------------------------------------------------ main loop
+
+let time = 0, last = performance.now(), lastRendered = 0, fps = 0, avg = null;
+
+function statsText(objs) {
+  const { engine, name } = active;
+  const size = `${engine.width}x${engine.height}, ${objs.length} objects\n`;
+  if (name === 'gpu') {
+    const info = engine.adapterInfo;
+    const adapter = [info.vendor, info.architecture || info.device].filter(Boolean).join(' ') || 'GPU';
+    return `<span class="fps">${fps.toFixed(0)} fps</span>\n`
+      + 'GPU (WebGPU)\n'
+      + `  cpu encode ${avg.encode.toFixed(1)} ms\n`
+      + `  gpu ~      ${avg.gpu.toFixed(1)} ms\n`
+      + size
+      + `${Math.round(avg.triangles)} triangles submitted\n`
+      + adapter;
+  }
+  return `<span class="fps">${fps.toFixed(0)} fps</span>\n`
+    + 'CPU (WebAssembly)\n'
+    + `render   ${avg.total.toFixed(1)} ms\n`
+    + `  clear    ${avg.clear.toFixed(1)}\n`
+    + `  raster   ${avg.raster.toFixed(1)}\n`
+    + `  lighting ${avg.deferred.toFixed(1)}\n`
+    + `  present  ${avg.present.toFixed(1)}\n`
+    + size
+    + `${Math.round(avg.triangles)} triangles\n`
+    + (engine.multithreaded
+      ? `${ui.threads.value}/${engine.maxThreads} threads`
+      : crossOriginIsolated ? 'single-threaded build' : 'single-threaded build\n(serve with COOP/COEP\n for threads)');
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (!active) return;
+  if (ui.animate.checked) time += dt;
+  updateCamera(dt, now / 1000);
+
+  const { engine, scene } = active;
+  const objs = sceneObjects(scene, time, parseInt(ui.crowd.value, 10));
+  const view = engine.objects(objs.length);
+  objs.forEach((o, i) => BgEngine.writeObject(view, i, o));
+
+  const basis = cameraBasis(camera.yaw, camera.pitch);
+  engine.setCamera({ position: camera.position, ...basis, fov: camera.fov });
+  engine.setPointLights(pointLights(scene, time));
+  engine.setLighting(environment, ui.pointLights.checked);
+
+  const t = engine.render({
+    threads: parseInt(ui.threads.value, 10),
+    simd: ui.simd.checked,
+    lighting: ui.lighting.value,
+    debugTriangles: ui.debugTris.checked,
+    usePointLights: ui.pointLights.checked,
+  });
+  if (!t) return; // GPU still busy with earlier frames
+  const p0 = performance.now();
+  engine.present(ctx);
+  t.present = performance.now() - p0;
+  t.total = (t.clear ?? 0) + (t.raster ?? 0) + (t.deferred ?? 0) + t.present;
+
+  // Smoothed stats.
+  const frameTime = Math.min(1, (now - lastRendered) / 1000);
+  lastRendered = now;
+  fps = fps ? fps * 0.95 + (1 / Math.max(frameTime, 1e-3)) * 0.05 : 60;
+  avg = avg ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, avg[k] * 0.9 + v * 0.1])) : t;
+  ui.stats.innerHTML = statsText(objs);
+}
+
+function main() {
+  ui.threads.addEventListener('input', () => { ui.threadsOut.textContent = ui.threads.value; ui.threads.dataset.touched = '1'; });
   ui.crowd.addEventListener('input', () => { ui.crowdOut.textContent = ui.crowd.value; });
-  ui.resolution.addEventListener('change', () => resize(engine));
-  addEventListener('resize', () => resize(engine));
-  resize(engine);
+  ui.resolution.addEventListener('change', resizeActive);
+  ui.renderer.addEventListener('change', () => switchRenderer(ui.renderer.value));
+  addEventListener('resize', resizeActive);
 
-  const scene = buildScene(engine);
-  let time = 0, last = performance.now(), fps = 0, avg = null;
-
-  function frame(now) {
-    const dt = Math.min(0.1, (now - last) / 1000);
-    last = now;
-    if (ui.animate.checked) time += dt;
-    updateCamera(dt, now / 1000);
-
-    const objs = sceneObjects(scene, time, parseInt(ui.crowd.value, 10));
-    const view = engine.objects(objs.length);
-    objs.forEach((o, i) => BgEngine.writeObject(view, i, o));
-
-    const basis = cameraBasis(camera.yaw, camera.pitch);
-    engine.setCamera({ position: camera.position, ...basis, fov: camera.fov });
-    engine.setPointLights(pointLights(scene, time));
-    engine.setLighting(environment, ui.pointLights.checked);
-
-    const t = engine.render({
-      threads: parseInt(ui.threads.value, 10),
-      simd: ui.simd.checked,
-      lighting: ui.lighting.value,
-      debugTriangles: ui.debugTris.checked,
-      usePointLights: ui.pointLights.checked,
-    });
-    const p0 = performance.now();
-    engine.present(ctx);
-    t.present = performance.now() - p0;
-    t.total = t.clear + t.raster + t.deferred + t.present;
-
-    // Smoothed stats.
-    fps = fps ? fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05 : 60;
-    avg = avg ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, avg[k] * 0.9 + v * 0.1])) : t;
-    ui.stats.innerHTML =
-      `<span class="fps">${fps.toFixed(0)} fps</span>\n`
-      + `render   ${avg.total.toFixed(1)} ms\n`
-      + `  clear    ${avg.clear.toFixed(1)}\n`
-      + `  raster   ${avg.raster.toFixed(1)}\n`
-      + `  lighting ${avg.deferred.toFixed(1)}\n`
-      + `  present  ${avg.present.toFixed(1)}\n`
-      + `${engine.width}x${engine.height}, ${objs.length} objects\n`
-      + `${Math.round(avg.triangles)} triangles\n`
-      + (engine.multithreaded
-        ? `${ui.threads.value}/${engine.maxThreads} threads`
-        : crossOriginIsolated ? 'single-threaded build' : 'single-threaded build\n(serve with COOP/COEP\n for threads)');
-
-    requestAnimationFrame(frame);
+  const gpuOption = ui.renderer.querySelector('option[value=gpu]');
+  if (!navigator.gpu) {
+    gpuOption.disabled = true;
+    gpuOption.textContent += ' (not supported)';
   }
+  const wanted = params.get('renderer') === 'gpu' && navigator.gpu ? 'gpu' : 'cpu';
+  ui.renderer.value = wanted;
+  switchRenderer(wanted);
   requestAnimationFrame(frame);
 }
 

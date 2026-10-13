@@ -22,6 +22,6 @@ all the most ideal floating point optimization settings as well as debugging bei
 for help on that. 
 
 Web Port (browser version):
-The 'Web Port' folder has a standalone build of the C++ engine for the browser. It is compiled to WebAssembly and draws into an HTML canvas, without Unity, and it comes with a demo scene.
+The 'Web Port' folder has a standalone build of the C++ engine for the browser. It is compiled to WebAssembly and draws into an HTML canvas, without Unity, and it comes with a demo scene. The demo also has a WebGPU version of the renderer, and you can switch between CPU and GPU in the browser tab.
 To try it, run 'python3 serve.py' inside 'Web Port/web' and open http://localhost:8000. See 'Web Port/README.md' for build steps, the JavaScript API and the changes made to the engine.
 It does not change anything in the Unity project or the original C++ source.

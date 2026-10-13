@@ -3,6 +3,9 @@
 A standalone browser version of the BG C++ software rasterizer. The engine is compiled to
 WebAssembly with Emscripten and draws into a `<canvas>`. It does not need Unity.
 
+The demo also includes a **WebGPU version** of the same renderer. You can switch between the
+CPU engine and the GPU version live in the browser tab.
+
 This folder is self-contained and does not change the Unity project or the original C++
 source. `engine/MainEngine.cpp` is a copy of
 `C++ Source Project/Project1/Project1/MainEngine.cpp`, and every change is marked with a
@@ -25,8 +28,14 @@ can force the single-threaded build with `?st` in the URL.
 
 Controls: click the view, then use the mouse to look, WASD to move, Q/E or Space/Ctrl to go
 down/up, Shift to move faster and Esc to release the mouse. On touch screens, drag to look. The
-panel controls resolution, thread count, lighting mode (deferred per-pixel, per-vertex, unlit),
-SIMD, point lights, the debug triangle view and the size of the marching crowd.
+panel controls the renderer (CPU or GPU), resolution, thread count, lighting mode (deferred
+per-pixel, per-vertex, unlit), SIMD, point lights, the debug triangle view and the size of the
+marching crowd. Threads and SIMD only apply to the CPU renderer.
+
+The **Renderer** setting switches between "CPU (WebAssembly)" and "GPU (WebGPU)" without
+reloading. The camera, animation and settings carry over. `?renderer=gpu` in the URL starts on
+the GPU. In browsers without WebGPU the GPU option is greyed out, and the demo falls back to
+the CPU renderer.
 
 ## Build the engine
 
@@ -50,6 +59,7 @@ This writes `web/dist/raster-mt.{js,wasm}` (multithreaded) and `web/dist/raster-
 | `engine/WebApi.cpp` | JS-friendly C API: owns the frame buffers, flattens struct parameters, converts the frame for the canvas |
 | `build.sh` | Emscripten build for both variants |
 | `web/bg-engine.js` | JavaScript wrapper (`BgEngine`): load, add meshes/textures, set camera/lighting, render, present |
+| `web/gpu-renderer.js` | WebGPU version of the renderer (`GpuRenderer`), with the same API as `BgEngine` |
 | `web/scene.js` | Procedural meshes (plane, box, sphere, torus, cylinder/cone) and textures |
 | `web/main.js`, `web/index.html` | The demo |
 | `web/serve.py` | Local server with COOP/COEP headers |
@@ -69,6 +79,25 @@ This writes `web/dist/raster-mt.{js,wasm}` (multithreaded) and `web/dist/raster-
 
 `WebApi.cpp` also adds one row of padding to the frame buffers, because the rasterizer can write
 one pixel past the end of a scanline.
+
+## GPU (WebGPU) renderer
+
+`web/gpu-renderer.js` reproduces the engine's pipeline on the GPU, using the GPU's hardware
+rasterizer:
+
+| CPU engine | WebGPU version |
+| --- | --- |
+| Per-vertex scale, `rotateq`, translation and projection | Vertex shader, using the same quaternion formula. Objects are drawn with one instanced draw call per mesh |
+| Scanline rasterizer, barycentrics, depth buffer | GPU hardware, with a reversed-Z depth buffer |
+| Color buffer with the specular/metal code in alpha, plus normal buffer | Two render targets with the same encoding |
+| `Clear` sky gradient and `Differed` lighting | One full-screen shader, ported line by line: sun, sky/ground ambient, point lights, fog and sky reflections |
+| Vertex lighting, unlit and debug-triangle modes | Same modes, with the same per-triangle debug colors |
+
+Both renderers get the same meshes and textures, so the images match closely. Small
+differences remain. The GPU clips triangles properly at the near plane, where the CPU engine
+moves vertices onto it. The GPU keeps normals as floats instead of 8 bits, and it uses the
+hardware's pixel coverage rules. The GPU stats show the CPU time spent recording commands and
+an approximate GPU time. The triangle count is triangles submitted, before back-face culling.
 
 ## Using the engine in your own page
 
@@ -94,10 +123,14 @@ engine.present(canvas.getContext('2d'));
 Conventions match Unity: left-handed coordinates, +Y up, clockwise front faces, quaternions as
 (x, y, z, w), and colors as 0..1 floats.
 
+`GpuRenderer` has the same methods. Create it with `await GpuRenderer.load(canvas)`, which
+returns `null` without WebGPU, and pass it a canvas that has no other context. `present()` does
+nothing for it, because the browser shows the WebGPU canvas automatically.
+
 ## Performance notes
 
-These numbers come from headless Chromium on a 4-core cloud VM at 1280x720 with the demo scene
-(about 3,000 objects). They show relative cost only:
+These are CPU renderer numbers from headless Chromium on a 4-core cloud VM, at 1280x720 with the
+demo scene (about 3,000 objects). They show relative cost only:
 
 | Lighting | SIMD | Threads | Frame (ms) |
 | --- | --- | --- | --- |
@@ -108,4 +141,5 @@ These numbers come from headless Chromium on a 4-core cloud VM at 1280x720 with 
 
 At these settings the deferred lighting pass is the largest cost. That pass is scalar code in
 the original engine too. Lower resolutions (the 50% default) or per-vertex lighting run at
-60 fps on typical desktop CPUs.
+60 fps on typical desktop CPUs. The WebGPU version moves all of this work to the GPU. It wasn't
+benchmarked here, because the test machine has no GPU (only a software emulation).
