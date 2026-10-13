@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BG Software Renderer</title>
+  <style>
+    :root {
+      --bg: #0d0f14;
+      --panel: rgba(16, 19, 26, 0.86);
+      --text: #e6e8ee;
+      --muted: #9aa1b2;
+      --accent: #7cc4ff;
+      --border: rgba(255, 255, 255, 0.12);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+      font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    #view, #viewGpu { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated;
+      cursor: crosshair; touch-action: none; }
+    .panel { position: fixed; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 12px; backdrop-filter: blur(6px); }
+    #controls { top: 12px; left: 12px; width: 250px; max-height: calc(100% - 24px); overflow: auto; }
+    #controls h1 { font-size: 14px; margin: 0 0 2px; }
+    #controls .sub { color: var(--muted); margin-bottom: 8px; }
+    #controls label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+    #controls select, #controls input[type=range] { width: 120px; }
+    #controls input[type=checkbox] { margin: 0; }
+    #controls .disabled { opacity: 0.45; pointer-events: none; }
+    #controls details summary { cursor: pointer; color: var(--muted); }
+    #controls .help { color: var(--muted); margin-top: 8px; font-size: 12px; }
+    #stats { top: 12px; right: 12px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre; min-width: 190px; }
+    #stats .fps { font-size: 20px; color: var(--accent); }
+    #error { display: none; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 460px; }
+    @media (max-width: 600px) {
+      #controls { width: calc(100% - 24px); max-height: 45%; top: auto; bottom: 12px; }
+      #stats { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <canvas id="viewGpu" hidden></canvas>
+
+  <div id="controls" class="panel">
+    <h1>BG Software Renderer</h1>
+    <div class="sub">C++ CPU rasterizer (WebAssembly) and its WebGPU version</div>
+    <details open>
+      <summary>Settings</summary>
+      <label>Renderer
+        <select id="renderer">
+          <option value="cpu" selected>CPU (WebAssembly)</option>
+          <option value="gpu">GPU (WebGPU)</option>
+        </select>
+      </label>
+      <label>Resolution
+        <select id="resolution">
+          <option value="0.25">25%</option>
+          <option value="0.35">35%</option>
+          <option value="0.5" selected>50%</option>
+          <option value="0.75">75%</option>
+          <option value="1">100%</option>
+        </select>
+      </label>
+      <label class="cpu-only">Threads <span><input id="threads" type="range" min="1" max="1" value="1"> <span id="threadsOut">1</span></span></label>
+      <label>Lighting
+        <select id="lighting">
+          <option value="deferred" selected>Per pixel (deferred)</option>
+          <option value="vertex">Per vertex</option>
+          <option value="none">Unlit</option>
+        </select>
+      </label>
+      <label>Crowd size <span><input id="crowd" type="range" min="0" max="3000" step="50" value="600"> <span id="crowdOut">600</span></span></label>
+      <label class="cpu-only">SIMD <input id="simd" type="checkbox" checked></label>
+      <label>Point lights <input id="pointLights" type="checkbox" checked></label>
+      <label>Debug triangles <input id="debugTris" type="checkbox"></label>
+      <label>Animate <input id="animate" type="checkbox" checked></label>
+      <label>Auto camera <input id="autoCam" type="checkbox" checked></label>
+    </details>
+    <div class="help">Click the view to fly: mouse to look, WASD to move, Q/E or Space/Ctrl for down/up, Shift to go faster, Esc to release. On touch: drag to look.</div>
+  </div>
+
+  <div id="stats" class="panel">Loading…</div>
+  <div id="error" class="panel"></div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
